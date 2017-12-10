@@ -78,28 +78,18 @@ def check_updates():
 def run_command(offset, name, from_id, cmd):
     global w_data
     if cmd == '/ping': # Ответ на ping
-        send_text(from_id, 'pong') # Отправка ответа
+        send_text(from_id, 'lol') # Отправка ответа
 
-    elif cmd == 'goga': # Ответ на help
+    elif cmd == '/help': # Ответ на help
+            send_text(from_id, 'use /data to receive data from bee') # Ответ
+
+    elif cmd == '/data': # Ответ на help
         send_text(from_id, w_data) # Ответ
         #print receiver.my_func()
         #send_text(from_id, 'lol') # Ответ
 
-    elif cmd == '/photo': # Запрос фотографии с подключенной Web-камеры
-        # Для оператора If ниже. Если первая попытка успешна - выполняется условие, если нет, то вторая попытка и условие
-        # Если и вторая не успешна, тогда отчитываемся об ошибке
-        # Всё потому, что на моей конфигурации крайне изредка камера бывает недоступна с первого раза
-        if make_photo(offset) or make_photo(offset):
-            # Ниже, отправка пользователю уведомления об активности бота
-            requests.post(URL + TOKEN + '/sendChatAction', data={'chat_id': from_id, 'action': 'upload_photo'})
-            send_photo(from_id, offset) # Вызов процедуры отправки фото
-        else:
-            send_text(from_id, 'Error occured') # Ответ, сообщающий об ошибке
-
-    elif cmd == '/mail':
-        check_mail() # Вызов процедуры проверки почты
     else:
-        send_text(from_id, 'Got it. Write goga.') # Отправка ответа
+        send_text(from_id, 'Жопорыга') # Отправка ответа
 
 def log_event(text):
     """
@@ -201,9 +191,9 @@ if __name__ == "__main__":
             print 'lol'
             receiver.get_and_store()
             print 'lol'
-            print 'pip'
+            print 'pip1'
             print(w_data)
-            print 'pip'
+            print 'pip1'
             time.sleep(INTERVAL)
             #receiver.print_r()
             #print 'lol'
