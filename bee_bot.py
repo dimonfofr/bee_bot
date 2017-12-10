@@ -168,7 +168,7 @@ class Receiver:
         count = self.serial_port.in_waiting
         if self.serial_port.in_waiting > 50:
             w_data = self.serial_port.read(self.serial_port.in_waiting)
-            print w_data
+            
         
 
 
