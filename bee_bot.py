@@ -89,7 +89,7 @@ def run_command(offset, name, from_id, cmd):
         #send_text(from_id, 'lol') # Ответ
 
     else:
-        send_text(from_id, 'Жопорыга') # Отправка ответа
+        send_text(from_id, 'lol, use /help') # Отправка ответа
 
 def log_event(text):
     """
@@ -188,18 +188,9 @@ if __name__ == "__main__":
             
             #receiver.get_and_store()
             check_updates()
-            print 'lol'
             receiver.get_and_store()
-            print 'lol'
-            print 'pip1'
-            print(w_data)
-            print 'pip1'
             time.sleep(INTERVAL)
-            #receiver.print_r()
-            #print 'lol'
-            #print(w_data)
-            #print 'lol'
-            #print my_func()
+            
         except KeyboardInterrupt:
             print 'Прервано пользователем..'
             break
