@@ -63,7 +63,9 @@ def check_updates():
             log_event('Unknown update: %s' % update) # сохраняем в лог пришедшее обновление
             continue # и переходим к следующему обновлению
         from_id = update['message']['chat']['id'] # Извлечение ID чата (отправителя)
-        name = update['message']['chat']['first_name'] # Извлечение username отправителя
+        
+        name = update['message']['chat']['id'] # Извлечение username отправителя
+
         # if from_id <> ADMIN_ID: # Если отправитель не является администратором, то
         #     send_text("You're not autorized to use me!", from_id) # ему отправляется соответствующее уведомление
         #     log_event('Unautorized: %s' % update) # обновление записывается в лог
@@ -186,7 +188,7 @@ if __name__ == "__main__":
     while True:
         try:
             
-            #receiver.get_and_store()
+            receiver.get_and_store()
             check_updates()
             receiver.get_and_store()
             time.sleep(INTERVAL)
