@@ -1,19 +1,20 @@
+#!/usr/env/bin python
 # -*- coding: utf-8 -*-
-import requests
-import time
-import subprocess
-import os
-#import mailchecker
 
+import sys
+from telegram import ChatAction, ReplyKeyboardMarkup, ParseMode
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+
+ 
+import configparser
+import datetime
+import os
 
 import serial
 import syslog
 import time
 import struct
-#import weewx.drivers
 
-DRIVER_NAME = 'Swallow'
-DRIVER_VERSION = '1.0'
 DEFAULT_PORT = '/dev/ttyUSB0'
 BAUDRATE = 115200
 DEBUG_READ = 0
@@ -21,178 +22,148 @@ PACKET_BYTE_COUNT = 49
 BASE = 16
 DATA_START_INDEX = 2
 DATA_END_INDEX = -5
+INTERVAL = 5
 
-requests.packages.urllib3.disable_warnings() # Подавление InsecureRequestWarning, с которым я пока ещё не разобрался
-
-# Ключ авторизации Вашего бота Вы можете получить в любом клиенте Telegram у бота @BotFather
-# ADMIN_ID - идентификатор пользователя (то есть Вас), которому подчиняется бот
-# Чтобы определить Ваш ID, я предлагаю отправить боту сообщение от своего имени (аккаунта) через любой клиент
-# А затем получить это сообщения с помощью обычного GET запроса
-# Для этого вставьте в адресную строку Вашего браузера следующий адрес, заменив <token> на свой ключ:
-# https://api.telegram.org/bot<token>/getUpdates
-# Затем, в ответе найдите объект "from":{"id":01234567,"first_name":"Name","username":"username"}
-# Внимательно проверьте имя, логин и текст сообщения
-# Если всё совпадает, то цифровое значение ключа "id" - это и есть ваш идентификатор
-
-# Переменным ADMIN_ID и TOKEN необходимо присвоить Вашим собственные значения
-INTERVAL = 3 # Интервал проверки наличия новых сообщений (обновлений) на сервере в секундах
-ADMIN_ID = 259338823 # ID пользователя. Комманды от других пользователей выполняться не будут
-URL = 'https://api.telegram.org/bot' # Адрес HTTP Bot API
-TOKEN = '492607821:AAHaQwGFTfiFKCocG3P7oYasqM_vBHn4RNA' # Ключ авторизации для Вашего бота
-offset = 0 # ID последнего полученного обновления
 w_data = 'goga'
-def check_updates():
-    """Проверка обновлений на сервере и инициация действий, в зависимости от команды"""
-    global offset
-    data = {'offset': offset + 1, 'limit': 5, 'timeout': 0} # Формируем параметры запроса
 
+CONFIG_WAY = "local"
+
+if CONFIG_WAY == "local":
+    config = configparser.ConfigParser()
+    config.read('config.cfg')
+    token = config.get('BOT', 'token')
+    mysql_user = config.get('MYSQL', 'user')
+    mysql_passwd = config.get('MYSQL', 'password')
+    mysql_db = config.get('MYSQL', 'database')
+    vcp_port = config.get('VCP_PORT', 'vcp_port')
+    config = {'token': token, 'mysql_user': mysql_user, 'mysql_passwd': mysql_passwd, 'mysql_db': mysql_db, 'vcp_port': vcp_port}
+elif CONFIG_WAY == "heroku":
+    token = os.environ['TOKEN']
+    mysql_user = os.environ['MYSQL_USER']
+    mysql_passwd = os.environ['MYSQL_PASSWD']
+    mysql_db = os.environ['MYSQL_DB']
+    config = {'token': token, 'mysql_user': mysql_user, 'mysql_passwd': mysql_passwd, 'mysql_db': mysql_db}
+else:
+    print('nor \"local\" or \"heroku\" in CONFIG')
+    raise Exception
+
+
+def start(bot, update):
+    custom_keyboard = [["/tell"]]
+    reply_markup = ReplyKeyboardMarkup(custom_keyboard, resize_keyboard=True)
+    msg = "Привет! \xE2\x9C\x8C" \
+          "\nЧтобы узнать погоду, нажми на кнопку\xF0\x9F\x91\x87 или отправь goga /tell"
+    bot.send_message(chat_id=update.message.chat_id,
+                     text=msg, reply_markup=reply_markup)
+
+
+def get_data_from_database():
+    db = MySQLdb.connect(host='localhost', user=config['mysql_user'], passwd=config['mysql_passwd'], db=config['mysql_db'])
+    cursor = db.cursor()
     try:
-        request = requests.post(URL + TOKEN + '/getUpdates', data=data) # Отправка запроса обновлений
-    except:
-        log_event('Error getting updates') # Логгируем ошибку
-        return False # Завершаем проверку
+        query = "SELECT dateTime, pressure, outTemp, inTemp, outHumidity, windSpeed, windDir, deltarain, geiger, illumination FROM raw ORDER BY dateTime DESC LIMIT 1;"
+        cursor.execute(query)
+        data = cursor.fetchall()
+        for rec in data:
+            dateTime, pressure, outTemp, inTemp, outHumidity, windSpeed, windDir, deltarain, geiger, illumination = rec
+        return {'dateTime'     : (int(dateTime) if dateTime is not None else '---'),
+                'pressure'     : (int(pressure * 0.750064) if pressure is not None else '---'),  # hPa to mmHg
+                'outTemp'      : (round(float(outTemp), 1) if outTemp is not None else '---'),
+                'inTemp'       : (round(float(inTemp), 1) if inTemp is not None else '---'),
+                'outHumidity'  : (int(outHumidity) if outHumidity is not None else '---'),
+                'windSpeed'    : (round(float(windSpeed), 1) if windSpeed is not None else '---'),
+                'deltarain'    : (int(deltarain) if deltarain is not None else '---'),
+                'geiger'       : (int(geiger) if geiger is not None else '---'),
+                'illumination' : (int(illumination) if illumination is not None else '---')
+                }
+    except Exception as e:
+        print(e)
+        return None
+    finally:
+        cursor.close()
+        db.close()
 
-    if not request.status_code == 200: return False # Проверка ответа сервера
-    if not request.json()['ok']: return False # Проверка успешности обращения к API
-    for update in request.json()['result']: # Проверка каждого элемента списка
-        offset = update['update_id'] # Извлечение ID сообщения
-
-        # Ниже, если в обновлении отсутствует блок 'message'
-        # или же в блоке 'message' отсутствует блок 'text', тогда
-        if not 'message' in update or not 'text' in update['message']:
-            log_event('Unknown update: %s' % update) # сохраняем в лог пришедшее обновление
-            continue # и переходим к следующему обновлению
-        from_id = update['message']['chat']['id'] # Извлечение ID чата (отправителя)
-        
-        name = update['message']['chat']['id'] # Извлечение username отправителя
-
-        # if from_id <> ADMIN_ID: # Если отправитель не является администратором, то
-        #     send_text("You're not autorized to use me!", from_id) # ему отправляется соответствующее уведомление
-        #     log_event('Unautorized: %s' % update) # обновление записывается в лог
-        #     continue # и цикл переходит к следующему обновлению
-        message = update['message']['text'] # Извлечение текста сообщения
-        parameters = (offset, name, from_id, message)
-        log_event('Message (id%s) from %s (id%s): "%s"' % parameters) # Вывод в лог ID и текста сообщения
-
-        # В зависимости от сообщения, выполняем необходимое действие
-        run_command(*parameters)
-        
-def run_command(offset, name, from_id, cmd):
-    global w_data
-    if cmd == '/ping': # Ответ на ping
-        send_text(from_id, 'lol') # Отправка ответа
-
-    elif cmd == '/help': # Ответ на help
-            send_text(from_id, 'use /data to receive data from bee') # Ответ
-
-    elif cmd == '/data': # Ответ на help
-        send_text(from_id, w_data) # Ответ
-        #print receiver.my_func()
-        #send_text(from_id, 'lol') # Ответ
-
-    else:
-        send_text(from_id, 'lol, use /help') # Отправка ответа
-
-def log_event(text):
-    """
-    Процедура логгирования
-    ToDo: 1) Запись лога в файл
-    """
-    event = '%s >> %s' % (time.ctime(), text)
-    print event
-
-def send_text(chat_id, text):
-    """Отправка текстового сообщения по chat_id
-    ToDo: повторная отправка при неудаче"""
-    log_event('Sending to %s: %s' % (chat_id, text)) # Запись события в лог
-    data = {'chat_id': chat_id, 'text': text} # Формирование запроса
-    request = requests.post(URL + TOKEN + '/sendMessage', data=data) # HTTP запрос
-    if not request.status_code == 200: # Проверка ответа сервера
-        return False # Возврат с неудачей
-    return request.json()['ok'] # Проверка успешности обращения к API
-
-def make_photo(photo_id):
-    """Обращение к приложению fswebcam для получения снимка с Web-камеры"""
-    photo_name = 'photo/%s.jpg' % photo_id # Формирование имени файла фотографии
-    subprocess.call('fswebcam -q -r 1280x720 %s' % photo_name, shell=True) # Вызов shell-команды
-    return os.path.exists(photo_name) # Проверка, появился ли файл с таким названием
-
-def send_photo(chat_id, photo_id):
-    """Отправка фото по его идентификатору выбранному контакту"""
-    data = {'chat_id': chat_id} # Формирование параметров запроса
-    photo_name = 'photo/%s.jpg' % photo_id # Формирования имени файла фотографии
-    if not os.path.exists(photo_name): return False # Проверка существования фотографии
-    files = {'photo': open(photo_name, 'rb')} # Открытие фото и присвоение
-    request = requests.post(URL + TOKEN + '/sendPhoto', data=data, files=files) # Отправка фото
-    return request.json()['ok'] # Возврат True или False, полученного из ответа сервера, в зависимости от результата
-
-def check_mail():
-    """Проверка почтовых ящиков с помощью самодельного модуля"""
-    print "Подключите и настройте модуль проверки почты"
-    return False
-    try:
-        log_event('Checking mail...') # Запись в лог
-        respond = mailchecker.check_all() # Получаем ответ от модуля проверки
-    except:
-        log_event('Mail check failed.') # Запись в лог
-        return False # И возврат с неудачей
-    if not respond: respond = 'No new mail.' # Если ответ пустой, тогда заменяем его на соответствующее сообщение
-    send_text(ADMIN_ID, respond) # Отправляем это сообщение администратору
-    return True
-
-class Receiver:
-
-    def __init__(self, port, baudrate):
-        self.port = port
-        self.baudrate = baudrate
-        self.timeout = 3
-        self.serial_port = None
-       # self.my_func()
-
-    def my_func(self):
-        count = self.serial_port.in_waiting
-        if self.serial_port.in_waiting > 50:
-            data = self.serial_port.read(self.serial_port.in_waiting)
-            return data
-        
-    def open(self):    
-        self.serial_port = serial.Serial(self.port, self.baudrate,
-                                         timeout=self.timeout)
-
-    def print_r(self):   
-        count = self.serial_port.in_waiting
-        if self.serial_port.in_waiting > 150:
-            data = self.serial_port.read(self.serial_port.in_waiting)
-            print data
-
-    def get_and_store(self):  
-        global w_data 
-        count = self.serial_port.in_waiting
-        if self.serial_port.in_waiting > 50:
-            w_data = self.serial_port.read(self.serial_port.in_waiting)
-            
-        
+def bee(bot, update):
+    global w_data 
+    bot.send_message(chat_id=update.message.chat_id, text=w_data,parse_mode=ParseMode.MARKDOWN)
+    print(update.message.chat_id, update.message.text) 
 
 
-       # while data_left < PACKET_BYTE_COUNT:
-            # self.serial_port.flushInput()
-            # time.sleep(10)
-            #data_left = self.serial_port.inWaiting()
-        
-        #received_bytes = self.serial_port.read(PACKET_BYTE_COUNT)
+def tell_weather(bot, update):
+    current_weather = get_data_from_database()
+    msg = """
+           Погодные данные на %s: \
+           \n\xE2\x99\xA8 Температура воздуха: *%s* °C \
+           \n\xF0\x9F\x92\xAA Давление: *%s* мм рт.ст \
+           \n\xF0\x9F\x92\xA6 Влажность: *%s* %% \
+           \n\xF0\x9F\x92\xA8 Ветер: *%s* м/с\
+           \n\xE2\x98\x94 Дождь: *%s* мм/ч\
+           \n\xF0\x9F\x92\xA1 Освещенность: *%s* люкс \
+           \nВеб-интерфейс \xF0\x9F\x91\x89[тут](http://weather.thirdpin.ru) \
+           """ % (datetime.datetime.fromtimestamp(int(current_weather['dateTime'])).strftime('%d.%m.%Y, %H:%M'),
+                  current_weather['outTemp'],
+                  current_weather['pressure'],
+                  current_weather['outHumidity'],
+                  current_weather['windSpeed'],
+                  current_weather['deltarain'],
+                  current_weather['illumination']
+                  )
+
+    bot.send_message(chat_id=update.message.chat_id, text=msg,parse_mode=ParseMode.MARKDOWN)
+    print(update.message.chat_id, update.message.text)
 
 
-if __name__ == "__main__":
-    receiver = Receiver(DEFAULT_PORT,BAUDRATE)
-    receiver.open()
+def send_kitty(bot, update):
+    random_kitty = "http://thecatapi.com/api/images/get?format=src"
+    bot.sendChatAction(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+    bot.sendPhoto(chat_id=update.message.chat_id, photo=random_kitty)
+
+
+
+def main():
+    global w_data 
+    # Create the EventHandler and pass it your bot's token.
+    updater = Updater(config['token'])
+
+    # Get the dispatcher to register handlers
+    dp = updater.dispatcher
+
+    # on different commands - answer in Telegram
+    dp.add_handler(CommandHandler("start", start))
+    # dp.add_handler(CommandHandler("help", help))
+    dp.add_handler(CommandHandler("tell", bee))
+    dp.add_handler(CommandHandler("kitty", send_kitty))
+    dp.add_handler(CommandHandler("bee", bee))
+
+    # log all errors
+    # dp.add_error_handler(error)
+
+    
+    # Start the Bot
+    updater.start_polling()
+    print ('lol')
+    
+    serial_port = serial.Serial(config['vcp_port'], BAUDRATE, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, bytesize=serial.EIGHTBITS)
     while True:
         try:
             
-            receiver.get_and_store()
-            check_updates()
-            receiver.get_and_store()
-            time.sleep(INTERVAL)
             
+            count = serial_port.in_waiting
+            if serial_port.in_waiting > 50:
+                w_data = serial_port.read(serial_port.in_waiting)
+            print (w_data)
+            print ('lol2')
+            time.sleep(INTERVAL)
         except KeyboardInterrupt:
+            updater.stop()
             print 'Прервано пользователем..'
             break
+    # Run the bot until the you presses Ctrl-C or the process receives SIGINT,
+    # SIGTERM or SIGABRT. This should be used most of the time, since
+    # start_polling() is non-blocking and will stop the bot gracefully.
+    #updater.idle()
+
+if __name__ == '__main__':
+    
+    main()
+
